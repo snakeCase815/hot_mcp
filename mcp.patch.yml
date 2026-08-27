@@ -1,0 +1,21 @@
+# hot_mcp —— 单插件（host + client 双半），一个 insert 加载
+#
+# insert：把包 `hot_mcp` 挂进根 entry 列表。UI 与功能已合并进同一包，不再有
+# 第二个 insert / hot_mcp_ui。
+#   - host 半：loader 按 entry name `hot_mcp` 解析该包（Node 标准解析，exports 存在时
+#     用 exports["."]，否则用 main；exports 无 "." 键则失败），即 lib/index.js
+#     （4 个模型工具 + /mcp RPC 通道）。
+#   - client 半：client-modules 按同一个 entry name 读该包 package.json 的
+#     dsh.client + exports["./client"]，把 ui/client.js 作为浏览器 bundle 服务。
+#   依赖的 dsh-mcp-client 在启动时从 ctx.baseUrl（= profile 目录）的 node_modules 解析。
+#
+# 加载方式：`hot_mcp` 声明了 dsh.bundle.patch，作为 profile bundle 时本文件会在
+# 启动时自动应用，无需 --patch；若用 --patch 显式传本文件，就别同时保留 bundle
+# （同一 insert 会重复插入，根列表出现两个 id: hot_mcp）。
+#
+# 用法（本目录下执行；--port 避开已在 3080 运行的 GUI）：
+#   1) dsh plugin --profile web add link:D:/codes/dsh/hot_mcp   # 装根包（含 host main + dsh.client）
+#   2) dsh --profile web --port 3081                            # bundle 自动应用本 patch
+- insert:
+    - id: hot_mcp
+      name: 'hot_mcp'

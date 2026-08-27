@@ -1,0 +1,19 @@
+{
+  "name": "hot_mcp",
+  "version": "0.0.1",
+  "license": "MIT",
+
+  "main": "lib/index.js",
+  "dependencies": {
+    "@deepseek-ai/dsh-mcp-client": "0.0.1-rc.1"
+  },
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": "./ui/client.js",
+    "./package.json":"./package.json"
+  },
+  "files": [
+    "lib/index.js","mcp.patch.yml","ui/index.js","ui/client.js"
+  ],
+  "dsh":{"bundle":{"patch":"./mcp.patch.yml"},"client":{"platform": "web"}}
+}

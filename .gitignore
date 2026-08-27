@@ -1,0 +1,22 @@
+# Dependencies
+node_modules/
+
+# Logs
+*.log
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+
+# Editors
+.idea/
+.vscode/
+*.swp
+
+# Local env files (never commit secrets)
+.env
+.env.*
+
+# pnpm lockfile: `github:` installs ignore it (pnpm does not consume the
+# lockfile of a git dependency), and this repo has no dev-only dependencies.
+pnpm-lock.yaml
