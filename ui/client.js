@@ -56,7 +56,7 @@ window.__ModuleLoader__.load({
       const rpcId = typeof crypto !== "undefined" && crypto.randomUUID
         ? crypto.randomUUID()
         : Math.random().toString(36).slice(2);
-      return fetch(`/mcp/${method}`, {
+      return fetch("/api/hot-mcp", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ type: "client-request", rpcId, method, payload: payload ?? {} }),

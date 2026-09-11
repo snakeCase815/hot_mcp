@@ -11,7 +11,7 @@
 
 - host 端：`mcp_server_list / add / activate / deactivate / remove / refresh` 6 个模型工具可用。
 - client 端：设置页「MCP 服务器」区块支持新增（默认未激活）、激活/停用、刷新、删除；激活后工具以 `mcp__<serverName>__<tool>` 出现在工具表，停用/删除后全部消失。
-- `/mcp` RPC 通道：`{ authority: "loopback" }`，返回标准 JSON 信封。
+- `/api/hot-mcp` 精确 Fetch 路由（`connection.fetch.register`）：继承框架的 Host/Origin 栅栏 + 浏览器会话认证，返回标准 JSON 信封。
 
 ## 2. 架构：单插件双端
 
@@ -21,13 +21,13 @@
 ┌── 浏览器 (client 端) ──────────────────────────────┐
 │  设置页 settings.section 列表                      │
 │    └─ hot_mcp 区块「MCP 服务器」(ui/client.js)      │
-│         └─ fetch POST /mcp/<method> (JSON 信封)     │
+│         └─ fetch POST /api/hot-mcp (JSON 信封)   │
 └───────────────┬───────────────────────────────────┘
                 │  HTTP（仅 JSON 跨域）
 ┌───────────────┴───────────────────────────────────┐
 │  Node (host 端, lib/index.js)                     │
 │    ├─ inject: ['tools', 'connection']             │
-│    ├─ 6 个模型工具 + /mcp RPC 通道                 │
+│    ├─ 6 个模型工具 + /api/hot-mcp 路由            │
 │    ├─ Map<serverName, {config, fiber?}> ← 仅内存     │
 │    └─ ctx.plugin(mcp-client, config) / dispose    │
 │         └─ @deepseek-ai/dsh-mcp-client             │
@@ -36,7 +36,7 @@
 └──────────────────────────────────────────────────┘
 ```
 
-- **host 端** = 包入口 `main: lib/index.js`：6 个模型工具（list/add/activate/deactivate/remove/refresh）+ `/mcp` connection RPC 通道 + 动态挂载/销毁 mcp-client。
+- **host 端** = 包入口 `main: lib/index.js`：6 个模型工具（list/add/activate/deactivate/remove/refresh）+ `/api/hot-mcp` connection Fetch 路由 + 动态挂载/销毁 mcp-client。
 - **client 端** = 同一包的 `dsh.client` + `exports["./client"]` → `ui/client.js`：client-modules 按 entry name（`hot_mcp`）解析该包 package.json，把 `ui/client.js` 作为浏览器 bundle 服务到设置页 `settings.section` 的「MCP 服务器」区块。
 - 所以 patch 只需**一个 insert**（`name: hot_mcp`），同时满足 host 模块加载与 client bundle 发现。
 
@@ -44,7 +44,7 @@
 
 | 文件 | 作用 |
 |---|---|
-| `lib/index.js` | host 端（包 `main`）：6 工具 + `/mcp` 通道 + 动态挂载 |
+| `lib/index.js` | host 端（包 `main`）：6 工具 + `/api/hot-mcp` Fetch 路由 + 动态挂载 |
 | `ui/client.js` | client 端（浏览器 bundle）：设置页「MCP 服务器」区块，走 dsh 主题 token 样式 |
 | `ui/index.js` | 遗留 noop（旧独立 UI 包方案的残留，无运行时作用，可删；`files` 里仍列着） |
 | `mcp.patch.yml` | 一个 insert：`{ id: hot_mcp, name: 'hot_mcp' }` |
@@ -73,26 +73,26 @@ dsh --profile web                              # 无需 --patch
 ## 5. 工作原理
 
 - **动态挂载/两态生命周期**：内存态是 `Map<serverName, { config, fiber? }>`，`fiber` 仅激活时存在。**新增只存配置（未激活）**；**激活**= `ctx.plugin(mcp-client, config)` 并 await ready（失败回滚为未激活）；**停用** = `fiber.dispose()`（自动反注册工具，配置保留）；**删除** = 若激活先 dispose 再删配置；**刷新** = dispose + 重新 mount（仅已激活有效）。
-- **host→client RPC**：host `connection.rpc.handle("/mcp", handler, { authority: "loopback" })`；client 发 `{type:'client-request',rpcId,method,payload}` 到 `/mcp/<method>`，收到 `{type:'server-response',rpcId,result}`。handler 返回 `{ ok, value }` 或 `{ ok:false, error }`。方法：`list / add / activate / deactivate / remove / refresh`。
+- **host→client RPC**：host `connection.fetch.register({ path: "/api/hot-mcp", methods: ["POST"], requestBody: "buffered", fetch })`；client 发 `{type:'client-request',rpcId,method,payload}` 到 `/api/hot-mcp`，收到 `{type:'server-response',rpcId,result}`。handler 返回 `{ ok, value }` 或 `{ ok:false, error }`。方法：`list / add / activate / deactivate / remove / refresh`。
 - **client slot 注入**：client 插件 `inject: ['slots']`，`ctx.slots.inject('settings.section', () => ctx.slots.register({ name, id:'mcp', order:25, label, inject }, McpSection))`。
 - **样式**：`ui/client.js` 直接引用 dsh 主题 token CSS 变量（`--dsw-alias-bg-layer-*`、`--dsw-alias-border-l1`、`--dsw-alias-brand-primary`、`--dsw-alias-label-primary/secondary`、`--dsw-alias-state-success/error/warn`），自动跟随明/暗主题。
 - **持久化（仅配置）**：激活/停用状态只在 host 进程内存 `Map<serverName, { config, fiber? }>`；**仅配置**写入 `$DSH_HOME/hot_mcp.json`，启动恢复为未激活列表，读写失败降级纯内存不阻塞（见 §9）。
 
 ## 6. 关键踩坑（重要，改前必读）
 
-以下四条是本项目从踩坑中确认的硬约束：
+以下六条是本项目从踩坑中确认的硬约束：
 
 1. **`exports` 必须带 `"./package.json"`**。client-modules 用 `require.resolve("<pkg>/package.json")` 读取包的 `dsh.client` 声明；`exports` 一旦存在就是封装边界，不列出 `./package.json` 时该解析直接失败，hot_mcp 被**静默**判为"非客户端包"，UI 永不出现（`/plugins/hot_mcp/client.js` 404，但 GUI 其余正常）。全部官方客户端包都显式加 `"./package.json": "./package.json"`。
 2. **`exports["."]` 优先于 `main`**。存在 `exports` 时裸包名按 `exports` 解析；`"."` 曾指向 noop 的 `ui/index.js`，导致 host 不加载 `lib/index.js`（工具/通道全无）。修法：`"."` 指向 `./lib/index.js`，且**不能删掉 `"."` 键**（没有 `"."` 时裸包名导入直接失败，不会回退 `main`）。
-3. **host 必须 `inject: ['connection']`**。不声明时 apply 在 connection 服务就绪前就跑，`ctx.get('connection')` 拿到 undefined → `/mcp` 路由从未注册 → POST `/mcp/*` 落到前端静态 fallback，返回 **405**。声明后 Cordis 让 fiber 等 connection 就绪再 apply，通道稳定注册。
-4. **`rpc.handle` 第三参必填**。`connection.rpc.handle("/mcp", handler, { authority: "loopback" })`——不传 options 时 `register` 里 `options.authority` 直接抛 `Cannot read properties of undefined (reading 'authority')`，loader entry 启动失败。`authority` 取值 `'loopback'`（仅本机来源，本地管理页首选）或 `'trusted-host'`（额外放行配置的 LAN trustedHosts）。
+3. **host 必须 `inject: ['connection']`**。不声明时 apply 在 connection 服务就绪前就跑，`ctx.get('connection')` 拿到 undefined → `/api/hot-mcp` 路由从未注册 → POST `/api/hot-mcp` 落到前端静态 fallback，返回 **405**。声明后 Cordis 让 fiber 等 connection 就绪再 apply，路由稳定注册。
+4. **不要再用 `connection.rpc.handle`**（新 dsh ≥ 0.1.5-rc.1 已不适用）。新版 `dsh-client-connection`（commit `3e24087bfa`）的 `handle(channel, handler)` 会把通道路由注册在 `owner.webServer` 上——`owner` 经 Cordis traceable/shadow 绑定到 **connection 插件的 fiber**，而该插件的 `inject` 已从 `['webServer']` 改为 `['credentials']`（webServer 只在内部 `ctx.inject(['webServer'], …)` 派生上下文里注入、仅用于内置 `/api`），祖先链上找不到 webServer，于是任何插件调用 `rpc.handle` 都会在**加载时**抛 `cannot get property "webServer" without inject`（hot_mcp 曾因此整个 host 端加载失败、6 个工具与 UI 后端全无）。**给 hot_mcp 自己的 `inject` 加 `'webServer'` 也无效**（fiber 游走起点在 connection fiber，不在调用方 fiber，已实测）。第三参 `{ authority: "loopback" }` 亦已移除（信任策略统一为 Host/Origin 栅栏 + 浏览器会话认证，对所有 `/api` 请求生效）。插件自有 HTTP 端点一律改用 `connection.fetch.register({ path: "/api/<name>", methods, requestBody, fetch })`：不读 webServer，走 `/api` 载体继承框架信任与认证，且 `/api` 分发时**精确路由优先于 gateway 拦截器**（`/api` 的 rpc 拦截器已被 API gateway 独占，`rpc.intercept('/api', …)` 会因重复注册抛错，不可用）。
 5. **client 插件需 `inject: ['slots']`**：否则 `ctx.slots` 为 undefined，apply 抛错。
 6. **UI 改动即时生效无需重启**：client bundle 由 client-modules 按文件原样服务（`cache-control: no-cache`），改完 `ui/client.js` 整页刷新即可；只有改动 host（`lib/index.js`）/ package.json / profile 组成才需重启 dsh。
 
 ## 7. 测试 / 验证
 
 - **UI**：设置页新增（stdio：command/args/cwd/env；HTTP：url/headers，默认未激活）、行内激活/停用、刷新、删除二次确认、刷新列表。
-- **模型工具**：`mcp_server_list / add / activate / deactivate / remove / refresh`（与 UI 走同一套 `/mcp` 逻辑）。
+- **模型工具**：`mcp_server_list / add / activate / deactivate / remove / refresh`（与 UI 走同一套 `/api/hot-mcp` 逻辑）。
 - **工具注册验证**：新增后不出现工具（未激活）；激活后 `mcp__<serverName>__*` 出现在模型工具表，停用/删除后全部消失（`mcp_server_list` 的 `servers` 状态随之 active/inactive）。
 - **持久化**：新增后 `$DSH_HOME/hot_mcp.json` 出现该配置；重启 dsh 后配置仍在、但全部未激活；删除后文件记录消失。
 
@@ -100,7 +100,7 @@ dsh --profile web                              # 无需 --patch
 
 - client 端注入范例：`node_modules/@deepseek-ai/dsh-client-ui-settings-models/lib/client.js`（`inject` + `apply` + `settings.section` 注册）
 - client-modules 发现逻辑：`node_modules/@deepseek-ai/dsh-client-modules/lib/index.js`（`resolveMeta` / `processOne` / `serveBundle`）
-- RPC 通道契约：`node_modules/@deepseek-ai/dsh-client-connection/lib/types/rpc.d.ts`（authority 必填）、`lib/index.js`（`rpcFetchHandler`）
+- Fetch 路由契约：`node_modules/@deepseek-ai/dsh-client-connection/lib/types/rpc.d.ts`（`HostConnectionFetch.register`，path 必须在 `/api/` 下、endpoint 段限 `[A-Za-z0-9_$.-]+`）、`lib/index.js`（`bridge` / `createSharedFetchHandler`，`/api` 分发时精确路由优先于 gateway 拦截器）
 - 主题 token：client 侧 Theme Inspect Provider `listTokens`
 - 动态挂载：`@deepseek-ai/dsh-cordis-host-runner`（`ctx.plugin` + `fiber.dispose`）
 - MCP 底层：`@deepseek-ai/dsh-mcp-client`（`startConnection` / `syncTools` / `apply`）
